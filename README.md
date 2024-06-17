@@ -26,17 +26,14 @@ Numaflow installs in a few minutes and is easier and cheaper to use for developi
 - Kubernetes-native: If you know Kubernetes, you already know how to use Numaflow.
 - Language agnostic: Use your favorite programming language.
 - Auto-scaling with back-pressure: Each vertex automatically scales from zero to whatever is needed.
+- Ready-to-use sources/sinks: Kafka, Pulsar, HTTP, and more. Easy to write custom sources and sinks.
 - Exactly-Once semantics: No input element is duplicated or lost even as pods are rescheduled or restarted.
 
-## Data Integrity Guarantees:
+## Data Integrity Guarantees
 
 - Minimally provide at-least-once semantics
 - Provide exactly-once semantics for unbounded and near real-time data sources
 - Preserving order is not required
-
-## Roadmap
-
-- Map Streaming (1.3)
 
 ## Demo
 
@@ -52,3 +49,7 @@ Numaflow installs in a few minutes and is easier and cheaper to use for developi
 ## Get Support
 There are several ways to get in touch with us:
 * [Slack Community](https://numaproj.slack.com/join/shared_invite/zt-19svuv47m-YKHhsQ~~KK9mBv1E7pNzfg#/shared-invite/email)
+
+## Roadmap
+
+- Map Streaming (1.3)
