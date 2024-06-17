@@ -9,16 +9,15 @@
 
 ## Summary
 
-Numaflow is a Kubernetes-native tool for running massively parallel stream processing. A Numaflow Pipeline is implemented
-as a Kubernetes custom resource and consists of one or more source, data processing, and sink vertices.
+Numaflow is a Kubernetes-native platform for developing event-driven applications and event processing. A Numaflow Pipeline is implemented
+as a Kubernetes custom resource and consists of one or more sources, processing, and sink vertices.
 
-Numaflow installs in a few minutes and is easier and cheaper to use for simple data processing applications than a
-full-featured stream processing platforms.
+Numaflow installs in a few minutes and is easier and cheaper to use for developing event-driven applications.
 
 ## Use Cases
 
-- Real-time data analytics applications.
-- Event driven applications such as anomaly detection, monitoring, and alerting.
+- Event-driven applications such as anomaly detection, monitoring, and alerting.
+- Real-time analytics.
 - Streaming applications such as data instrumentation and data movement.
 - Workflows running in a streaming manner.
 
@@ -26,8 +25,8 @@ full-featured stream processing platforms.
 
 - Kubernetes-native: If you know Kubernetes, you already know how to use Numaflow.
 - Language agnostic: Use your favorite programming language.
-- Exactly-Once semantics: No input element is duplicated or lost even as pods are rescheduled or restarted.
 - Auto-scaling with back-pressure: Each vertex automatically scales from zero to whatever is needed.
+- Exactly-Once semantics: No input element is duplicated or lost even as pods are rescheduled or restarted.
 
 ## Data Integrity Guarantees:
 
@@ -49,3 +48,7 @@ full-featured stream processing platforms.
 - [EXAMPLES](examples)
 - [DEVELOPMENT](docs/development/development.md)
 - [CONTRIBUTING](https://github.com/numaproj/numaproj/blob/main/CONTRIBUTING.md)
+
+## Get Support
+There are several ways to get in touch with us:
+* [Slack Community](https://numaproj.slack.com/join/shared_invite/zt-19svuv47m-YKHhsQ~~KK9mBv1E7pNzfg#/shared-invite/email)
