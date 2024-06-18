@@ -9,10 +9,9 @@
 
 ## Summary
 
-Numaflow is a Kubernetes-native platform that enables developers to build scalable and reliable event-driven applications. A Numaflow Pipeline is implemented
-as a Kubernetes custom resource and consists of one or more sources, processing, and sink vertices.
+Numaflow is a Kubernetes-native platform for developing scalable and reliable event-driven applications. The platform enables developers to decouple event sources and sinks from the processing logic, allowing independent autoscaling of each component (even to zero!). Processing logic can be written in any programming language, providing flexibility for development teams. With out-of-the-box integrations for a wide variety of sources and sinks, Numaflow simplifies event consumption, reduces boilerplate code, and makes it easier to get started.
 
-Numaflow installs in a few minutes and is easier and cheaper to use for developing event-driven applications.
+Created by the same team behind Argo and leveraging our expertise in Kubernetes-native platforms, Numaflow offers an end-to-end platform for developing event-driven applications.
 
 ## Use Cases
 
