@@ -45,10 +45,6 @@ Created by the same team behind Argo and leveraging our expertise in Kubernetes-
 - [DEVELOPMENT](docs/development/development.md)
 - [CONTRIBUTING](https://github.com/numaproj/numaproj/blob/main/CONTRIBUTING.md)
 
-## Get Support
-There are several ways to get in touch with us:
-* [Slack Community](https://numaproj.slack.com/join/shared_invite/zt-19svuv47m-YKHhsQ~~KK9mBv1E7pNzfg#/shared-invite/email)
-
 ## Roadmap
 
 - Map Streaming (1.3)
