@@ -19,7 +19,9 @@ package udf
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"strconv"
 	"sync"
 
 	"go.uber.org/zap"
@@ -29,10 +31,8 @@ import (
 	"github.com/numaproj/numaflow/pkg/isb"
 	"github.com/numaproj/numaflow/pkg/metrics"
 	"github.com/numaproj/numaflow/pkg/sdkclient"
-	"github.com/numaproj/numaflow/pkg/sdkclient/batchmapper"
 	"github.com/numaproj/numaflow/pkg/sdkclient/mapper"
-	"github.com/numaproj/numaflow/pkg/sdkclient/mapstreamer"
-	sdkserverinfo "github.com/numaproj/numaflow/pkg/sdkclient/serverinfo"
+	"github.com/numaproj/numaflow/pkg/sdkclient/serverinfo"
 	"github.com/numaproj/numaflow/pkg/shared/callback"
 	jsclient "github.com/numaproj/numaflow/pkg/shared/clients/nats"
 	"github.com/numaproj/numaflow/pkg/shared/logging"
@@ -68,8 +68,7 @@ func (u *MapUDFProcessor) Start(ctx context.Context) error {
 		fromVertexWmStores map[string]store.WatermarkStore
 		toVertexWmStores   map[string]store.WatermarkStore
 		mapHandler         *rpc.GRPCBasedMap
-		mapStreamHandler   *rpc.GRPCBasedMapStream
-		batchMapHandler    *rpc.GRPCBasedBatchMap
+		mapStreamHandler   *rpc.GRPCBasedMap
 		idleManager        wmb.IdleManager
 		vertexName         = u.VertexInstance.Vertex.Spec.Name
 		pipelineName       = u.VertexInstance.Vertex.Spec.PipelineName
@@ -104,7 +103,7 @@ func (u *MapUDFProcessor) Start(ctx context.Context) error {
 		}
 
 		// created watermark related components only if watermark is enabled
-		// otherwise no op will used
+		// otherwise no op will be used
 		if !u.VertexInstance.Vertex.Spec.Watermark.Disabled {
 			// create from vertex watermark stores
 			fromVertexWmStores, err = jetstream.BuildFromVertexWatermarkStores(ctx, u.VertexInstance, natsClientPool.NextAvailableClient())
@@ -132,103 +131,90 @@ func (u *MapUDFProcessor) Start(ctx context.Context) error {
 	}
 
 	opts := []forward.Option{forward.WithLogger(log)}
+	enableMapUdfStream := false
 	maxMessageSize := sharedutil.LookupEnvIntOr(dfv1.EnvGRPCMaxMessageSize, sdkclient.DefaultGRPCMaxMessageSize)
-	enableMapUdfStream := sharedutil.LookupEnvBoolOr(dfv1.EnvMapStreaming, false)
-	enableBatchMapUdf := sharedutil.LookupEnvBoolOr(dfv1.EnvBatchMap, false)
 
-	// We can have the vertex running only of the map modes
-	if enableMapUdfStream && enableBatchMapUdf {
-		return fmt.Errorf("vertex cannot have both map stream and batch map modes enabled")
+	// Wait for map server info to be ready, we use the same info file for all the map modes
+	serverInfo, err := serverinfo.SDKServerInfo(serverinfo.WithServerInfoFilePath(sdkclient.MapServerInfoFile))
+	if err != nil {
+		return err
 	}
 
-	if enableMapUdfStream {
-		// Map Stream mode
-		// Wait for server info to be ready
-		serverInfo, err := sdkserverinfo.SDKServerInfo(sdkserverinfo.WithServerInfoFilePath(sdkclient.MapStreamServerInfoFile))
-		if err != nil {
-			return err
-		}
-
-		mapStreamClient, err := mapstreamer.New(serverInfo, sdkclient.WithMaxMessageSize(maxMessageSize))
-		if err != nil {
-			return fmt.Errorf("failed to create map stream client, %w", err)
-		}
-		mapStreamHandler = rpc.NewUDSgRPCBasedMapStream(vertexName, mapStreamClient)
-
-		// Readiness check
-		if err := mapStreamHandler.WaitUntilReady(ctx); err != nil {
-			return fmt.Errorf("failed on map stream UDF readiness check, %w", err)
-		}
-		defer func() {
-			err = mapStreamHandler.CloseConn(ctx)
-			if err != nil {
-				log.Warnw("Failed to close gRPC client conn", zap.Error(err))
-			}
-		}()
-		opts = append(opts, forward.WithUDFStreamingMap(mapStreamHandler))
-
-	} else if enableBatchMapUdf {
-		// if Batch Map mode is enabled create the client and handler for that accordingly
-
-		// Wait for server info to be ready
-		serverInfo, err := sdkserverinfo.SDKServerInfo(sdkserverinfo.WithServerInfoFilePath(sdkclient.BatchMapServerInfoFile))
-		if err != nil {
-			return err
-		}
-
-		// create the client and handler for batch map interface
-		batchMapClient, err := batchmapper.New(serverInfo, sdkclient.WithMaxMessageSize(maxMessageSize))
-		if err != nil {
-			return fmt.Errorf("failed to create batch map client, %w", err)
-		}
-		batchMapHandler = rpc.NewUDSgRPCBasedBatchMap(vertexName, batchMapClient)
-		// Readiness check
-		if err := batchMapHandler.WaitUntilReady(ctx); err != nil {
-			return fmt.Errorf("failed on batch map UDF readiness check, %w", err)
-		}
-		defer func() {
-			err = batchMapHandler.CloseConn(ctx)
-			if err != nil {
-				log.Warnw("Failed to close gRPC client conn", zap.Error(err))
-			}
-		}()
-		opts = append(opts, forward.WithUDFBatchMap(batchMapHandler))
-	} else {
-		// Default is to enable unary map mode
-
-		// Wait for server info to be ready
-		serverInfo, err := sdkserverinfo.SDKServerInfo(sdkserverinfo.WithServerInfoFilePath(sdkclient.MapServerInfoFile))
-		if err != nil {
-			return err
-		}
-
-		// create the client and handler for map interface
-		mapClient, err := mapper.New(serverInfo, sdkclient.WithMaxMessageSize(maxMessageSize))
-		if err != nil {
-			return fmt.Errorf("failed to create map client, %w", err)
-		}
-		mapHandler = rpc.NewUDSgRPCBasedMap(vertexName, mapClient)
-
-		// Readiness check
-		if err := mapHandler.WaitUntilReady(ctx); err != nil {
-			return fmt.Errorf("failed on map UDF readiness check, %w", err)
-		}
-		defer func() {
-			err = mapHandler.CloseConn(ctx)
-			if err != nil {
-				log.Warnw("Failed to close gRPC client conn", zap.Error(err))
-			}
-		}()
-		opts = append(opts, forward.WithUDFUnaryMap(mapHandler))
-	}
+	// track all the resources that need to be closed
+	var resourcesToClose []io.Closer
+	mapMode, ok := serverInfo.Metadata[serverinfo.MapModeKey]
 
 	for index, bufferPartition := range fromBuffer {
+		// Read the server info file to read which map mode is enabled
+		// Based on the value set, we will create the corresponding handler and clients
+		// we create a new client and handler for each partition because
+		// the client is not thread safe since we use one common gRPC Bidirectional stream
+		// to communicate with the server
+
+		if ok && (serverinfo.MapMode(mapMode) == serverinfo.StreamMap) {
+			log.Info("Map mode enabled: Stream Map")
+			// Map Stream mode
+			enableMapUdfStream = true
+
+			mapStreamClient, err := mapper.New(ctx, serverInfo, sdkclient.WithMaxMessageSize(maxMessageSize), sdkclient.WithUdsSockAddr(sdkclient.MapStreamAddr))
+			if err != nil {
+				return fmt.Errorf("failed to create map stream client, %w", err)
+			}
+			mapStreamHandler = rpc.NewUDSgRPCBasedMap(ctx, mapStreamClient, vertexName)
+
+			// Readiness check
+			if err := mapStreamHandler.WaitUntilReady(ctx); err != nil {
+				return fmt.Errorf("failed on map stream UDF readiness check, %w", err)
+			}
+
+			resourcesToClose = append(resourcesToClose, mapStreamHandler)
+			opts = append(opts, forward.WithUDFStreamingMap(mapStreamHandler))
+
+		} else if ok && (serverinfo.MapMode(mapMode) == serverinfo.BatchMap) {
+			log.Info("Map mode enabled: Batch Map")
+
+			// create the map client with batch map socket address
+			mapClient, err := mapper.New(ctx, serverInfo, sdkclient.WithMaxMessageSize(maxMessageSize), sdkclient.WithUdsSockAddr(sdkclient.BatchMapAddr), sdkclient.WithBatchMapMode())
+			if err != nil {
+				return fmt.Errorf("failed to create batch map client, %w", err)
+			}
+			mapHandler = rpc.NewUDSgRPCBasedMap(ctx, mapClient, vertexName)
+			// Readiness check
+			if err := mapHandler.WaitUntilReady(ctx); err != nil {
+				return fmt.Errorf("failed on batch map UDF readiness check, %w", err)
+			}
+
+			resourcesToClose = append(resourcesToClose, mapHandler)
+			opts = append(opts, forward.WithUDFMap(mapHandler))
+
+		} else {
+			log.Info("Map mode enabled: Unary Map")
+			// Default is to enable unary map mode
+			// If the MapMode metadata is not available, we will start map by default this will ensure
+			// backward compatibility in case of version mismatch for map
+
+			// create the client and handler for map interface
+			mapClient, err := mapper.New(ctx, serverInfo, sdkclient.WithMaxMessageSize(maxMessageSize))
+			if err != nil {
+				return fmt.Errorf("failed to create map client, %w", err)
+			}
+			mapHandler = rpc.NewUDSgRPCBasedMap(ctx, mapClient, vertexName)
+
+			// Readiness check
+			if err := mapHandler.WaitUntilReady(ctx); err != nil {
+				return fmt.Errorf("failed on map UDF readiness check, %w", err)
+			}
+
+			resourcesToClose = append(resourcesToClose, mapHandler)
+			opts = append(opts, forward.WithUDFMap(mapHandler))
+		}
+
 		// Populate shuffle function map
 		shuffleFuncMap := make(map[string]*shuffle.Shuffle)
 		for _, edge := range u.VertexInstance.Vertex.Spec.ToEdges {
 			if edge.GetToVertexPartitionCount() > 1 {
 				s := shuffle.NewShuffle(edge.To, edge.GetToVertexPartitionCount())
-				shuffleFuncMap[fmt.Sprintf("%s:%s", edge.From, edge.To)] = s
+				shuffleFuncMap[edge.From+":"+edge.To] = s
 			}
 		}
 
@@ -238,13 +224,18 @@ func (u *MapUDFProcessor) Start(ctx context.Context) error {
 
 			// Drop message if it contains the special tag
 			if sharedutil.StringSliceContains(tags, dfv1.MessageTagDrop) {
+				metrics.UserDroppedMessages.With(map[string]string{
+					metrics.LabelVertex:             vertexName,
+					metrics.LabelPipeline:           pipelineName,
+					metrics.LabelVertexType:         string(dfv1.VertexTypeMapUDF),
+					metrics.LabelVertexReplicaIndex: strconv.Itoa(int(u.VertexInstance.Replica)),
+				}).Inc()
+
 				return result, nil
 			}
 
 			// Iterate through the edges
 			for _, edge := range u.VertexInstance.Vertex.Spec.ToEdges {
-				edgeKey := fmt.Sprintf("%s:%s", edge.From, edge.To)
-
 				// Condition to proceed for forwarding message: No conditions on edge, or message tags match edge conditions
 				proceed := edge.Conditions == nil || edge.Conditions.Tags == nil || len(edge.Conditions.Tags.Values) == 0 || sharedutil.CompareSlice(edge.Conditions.Tags.GetOperator(), tags, edge.Conditions.Tags.Values)
 
@@ -253,6 +244,7 @@ func (u *MapUDFProcessor) Start(ctx context.Context) error {
 					// else forward the message to the default partition
 					partitionIdx := isb.DefaultPartitionIdx
 					if edge.GetToVertexPartitionCount() > 1 {
+						edgeKey := edge.From + ":" + edge.To
 						if edge.ToVertexType == dfv1.VertexTypeReduceUDF { // Shuffle on keys
 							partitionIdx = shuffleFuncMap[edgeKey].ShuffleOnKeys(keys)
 						} else { // Shuffle on msgId
@@ -329,11 +321,8 @@ func (u *MapUDFProcessor) Start(ctx context.Context) error {
 	// Add the correct client handler for the metrics server, based on the mode being used.
 	if enableMapUdfStream {
 		metricsOpts = metrics.NewMetricsOptions(ctx, u.VertexInstance.Vertex, []metrics.HealthChecker{mapStreamHandler}, lagReaders)
-	} else if enableBatchMapUdf {
-		metricsOpts = metrics.NewMetricsOptions(ctx, u.VertexInstance.Vertex, []metrics.HealthChecker{batchMapHandler}, lagReaders)
 	} else {
 		metricsOpts = metrics.NewMetricsOptions(ctx, u.VertexInstance.Vertex, []metrics.HealthChecker{mapHandler}, lagReaders)
-
 	}
 	ms := metrics.NewMetricsServer(u.VertexInstance.Vertex, metricsOpts...)
 	if shutdown, err := ms.Start(ctx); err != nil {
@@ -355,16 +344,23 @@ func (u *MapUDFProcessor) Start(ctx context.Context) error {
 		}
 	}
 
-	// close the from vertex wm stores
+	// close the fromVertex wm stores
 	// since we created the stores, we can close them
 	for _, wmStore := range fromVertexWmStores {
 		_ = wmStore.Close()
 	}
 
-	// close the to vertex wm stores
+	// close the toVertex wm stores
 	// since we created the stores, we can close them
 	for _, wmStore := range toVertexWmStores {
 		_ = wmStore.Close()
+	}
+
+	// close the handlers
+	for _, r := range resourcesToClose {
+		if err := r.Close(); err != nil {
+			log.Errorw("Failed to close the resource", zap.Error(err))
+		}
 	}
 
 	log.Info("All udf data processors exited...")

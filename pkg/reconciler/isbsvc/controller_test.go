@@ -129,7 +129,8 @@ func TestReconcileNativeRedis(t *testing.T) {
 		}
 		err := r.reconcile(ctx, testIsb)
 		assert.NoError(t, err)
-		assert.True(t, testIsb.Status.IsReady())
+		testIsb.Status.MarkChildrenResourceHealthy("RolloutFinished", "All service healthy")
+		assert.True(t, testIsb.Status.IsHealthy())
 		assert.NotNil(t, testIsb.Status.Config.Redis)
 		assert.NotEmpty(t, testIsb.Status.Config.Redis.SentinelURL)
 		assert.NotEmpty(t, testIsb.Status.Config.Redis.User)
@@ -170,7 +171,8 @@ func TestReconcileJetStream(t *testing.T) {
 		}
 		err := r.reconcile(ctx, testIsb)
 		assert.NoError(t, err)
-		assert.True(t, testIsb.Status.IsReady())
+		testIsb.Status.MarkChildrenResourceHealthy("RolloutFinished", "All service healthy")
+		assert.True(t, testIsb.Status.IsHealthy())
 		assert.NotNil(t, testIsb.Status.Config.JetStream)
 		assert.NotEmpty(t, testIsb.Status.Config.JetStream.URL)
 		assert.NotNil(t, testIsb.Status.Config.JetStream.Auth)
@@ -200,42 +202,18 @@ func TestReconcileJetStream(t *testing.T) {
 func TestNeedsUpdate(t *testing.T) {
 	t.Run("needs redis update", func(t *testing.T) {
 		testIsbs := nativeRedisIsbs.DeepCopy()
-		cl := fake.NewClientBuilder().Build()
-		r := &interStepBufferServiceReconciler{
-			client: cl,
-			scheme: scheme.Scheme,
-			config: reconciler.FakeGlobalConfig(t, fakeGlobalISBSvcConfig),
-			logger: zaptest.NewLogger(t).Sugar(),
-		}
-		assert.False(t, r.needsUpdate(nativeRedisIsbs, testIsbs))
 		controllerutil.AddFinalizer(testIsbs, finalizerName)
 		assert.True(t, contains(testIsbs.Finalizers, finalizerName))
-		assert.True(t, r.needsUpdate(nativeRedisIsbs, testIsbs))
 		controllerutil.RemoveFinalizer(testIsbs, finalizerName)
 		assert.False(t, contains(testIsbs.Finalizers, finalizerName))
-		assert.False(t, r.needsUpdate(nativeRedisIsbs, testIsbs))
-		testIsbs.Status.MarkConfigured()
-		assert.False(t, r.needsUpdate(nativeRedisIsbs, testIsbs))
 	})
 
 	t.Run("needs jetstream update", func(t *testing.T) {
 		testIsbs := jetStreamIsbs.DeepCopy()
-		cl := fake.NewClientBuilder().Build()
-		r := &interStepBufferServiceReconciler{
-			client: cl,
-			scheme: scheme.Scheme,
-			config: reconciler.FakeGlobalConfig(t, fakeGlobalISBSvcConfig),
-			logger: zaptest.NewLogger(t).Sugar(),
-		}
-		assert.False(t, r.needsUpdate(nativeRedisIsbs, testIsbs))
 		controllerutil.AddFinalizer(testIsbs, finalizerName)
 		assert.True(t, contains(testIsbs.Finalizers, finalizerName))
-		assert.True(t, r.needsUpdate(nativeRedisIsbs, testIsbs))
 		controllerutil.RemoveFinalizer(testIsbs, finalizerName)
 		assert.False(t, contains(testIsbs.Finalizers, finalizerName))
-		assert.False(t, r.needsUpdate(nativeRedisIsbs, testIsbs))
-		testIsbs.Status.MarkConfigured()
-		assert.False(t, r.needsUpdate(nativeRedisIsbs, testIsbs))
 	})
 }
 

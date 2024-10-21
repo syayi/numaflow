@@ -14,22 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-/*
-
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
@@ -51,6 +35,9 @@ const (
 	// ISBSvcConditionDeployed has the status True when the InterStepBufferService
 	// has its RestfulSet/Deployment as well as services created.
 	ISBSvcConditionDeployed ConditionType = "Deployed"
+
+	// ISBSvcConditionChildrenResourcesHealthy has the status True when the child resources are healthy.
+	ISBSvcConditionChildrenResourcesHealthy ConditionType = "ChildrenResourcesHealthy"
 )
 
 type ISBSvcType string
@@ -67,8 +54,8 @@ const (
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.status.type`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Message",type=string,JSONPath=`.status.message`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:printcolumn:name="Message",type=string,JSONPath=`.status.message`
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +k8s:openapi-gen=true
 type InterStepBufferService struct {
@@ -78,6 +65,15 @@ type InterStepBufferService struct {
 	Spec InterStepBufferServiceSpec `json:"spec" protobuf:"bytes,2,opt,name=spec"`
 	// +optional
 	Status InterStepBufferServiceStatus `json:"status,omitempty" protobuf:"bytes,3,opt,name=status"`
+}
+
+func (isbs InterStepBufferService) GetType() ISBSvcType {
+	if isbs.Spec.Redis != nil {
+		return ISBSvcTypeRedis
+	} else if isbs.Spec.JetStream != nil {
+		return ISBSvcTypeJetStream
+	}
+	return ISBSvcTypeUnknown
 }
 
 // InterStepBufferServiceList is the list of InterStepBufferService resources
@@ -100,48 +96,73 @@ type BufferServiceConfig struct {
 }
 
 type InterStepBufferServiceStatus struct {
-	Status  `json:",inline" protobuf:"bytes,1,opt,name=status"`
-	Phase   ISBSvcPhase         `json:"phase,omitempty" protobuf:"bytes,2,opt,name=phase,casttype=ISBSvcPhase"`
-	Message string              `json:"message,omitempty" protobuf:"bytes,3,opt,name=message"`
-	Config  BufferServiceConfig `json:"config,omitempty" protobuf:"bytes,4,opt,name=config"`
-	Type    ISBSvcType          `json:"type,omitempty" protobuf:"bytes,5,opt,name=type"`
+	Status             `json:",inline" protobuf:"bytes,1,opt,name=status"`
+	Phase              ISBSvcPhase         `json:"phase,omitempty" protobuf:"bytes,2,opt,name=phase,casttype=ISBSvcPhase"`
+	Message            string              `json:"message,omitempty" protobuf:"bytes,3,opt,name=message"`
+	Config             BufferServiceConfig `json:"config,omitempty" protobuf:"bytes,4,opt,name=config"`
+	Type               ISBSvcType          `json:"type,omitempty" protobuf:"bytes,5,opt,name=type"`
+	ObservedGeneration int64               `json:"observedGeneration,omitempty" protobuf:"varint,6,opt,name=observedGeneration"`
 }
 
-func (isbsvc *InterStepBufferServiceStatus) SetPhase(phase ISBSvcPhase, msg string) {
-	isbsvc.Phase = phase
-	isbsvc.Message = msg
+func (iss *InterStepBufferServiceStatus) SetPhase(phase ISBSvcPhase, msg string) {
+	iss.Phase = phase
+	iss.Message = msg
 }
 
-func (isbsvc *InterStepBufferServiceStatus) SetType(typ ISBSvcType) {
-	isbsvc.Type = typ
+func (iss *InterStepBufferServiceStatus) SetType(typ ISBSvcType) {
+	iss.Type = typ
 }
 
 // InitConditions sets conditions to Unknown state.
-func (isbsvc *InterStepBufferServiceStatus) InitConditions() {
-	isbsvc.InitializeConditions(ISBSvcConditionConfigured, ISBSvcConditionDeployed)
-	isbsvc.SetPhase(ISBSvcPhasePending, "")
+func (iss *InterStepBufferServiceStatus) InitConditions() {
+	iss.InitializeConditions(ISBSvcConditionConfigured, ISBSvcConditionDeployed, ISBSvcConditionChildrenResourcesHealthy)
+	iss.SetPhase(ISBSvcPhasePending, "")
 }
 
 // MarkConfigured set the InterStepBufferService has valid configuration.
-func (isbsvc *InterStepBufferServiceStatus) MarkConfigured() {
-	isbsvc.MarkTrue(ISBSvcConditionConfigured)
-	isbsvc.SetPhase(ISBSvcPhasePending, "")
+func (iss *InterStepBufferServiceStatus) MarkConfigured() {
+	iss.MarkTrue(ISBSvcConditionConfigured)
+	iss.SetPhase(ISBSvcPhasePending, "")
 }
 
 // MarkNotConfigured the InterStepBufferService has configuration.
-func (isbsvc *InterStepBufferServiceStatus) MarkNotConfigured(reason, message string) {
-	isbsvc.MarkFalse(ISBSvcConditionConfigured, reason, message)
-	isbsvc.SetPhase(ISBSvcPhaseFailed, message)
+func (iss *InterStepBufferServiceStatus) MarkNotConfigured(reason, message string) {
+	iss.MarkFalse(ISBSvcConditionConfigured, reason, message)
+	iss.SetPhase(ISBSvcPhaseFailed, message)
 }
 
 // MarkDeployed set the InterStepBufferService has been deployed.
-func (isbsvc *InterStepBufferServiceStatus) MarkDeployed() {
-	isbsvc.MarkTrue(ISBSvcConditionDeployed)
-	isbsvc.SetPhase(ISBSvcPhaseRunning, "")
+func (iss *InterStepBufferServiceStatus) MarkDeployed() {
+	iss.MarkTrue(ISBSvcConditionDeployed)
+	iss.SetPhase(ISBSvcPhaseRunning, "")
 }
 
 // MarkDeployFailed set the InterStepBufferService deployment failed
-func (isbsvc *InterStepBufferServiceStatus) MarkDeployFailed(reason, message string) {
-	isbsvc.MarkFalse(ISBSvcConditionDeployed, reason, message)
-	isbsvc.SetPhase(ISBSvcPhaseFailed, message)
+func (iss *InterStepBufferServiceStatus) MarkDeployFailed(reason, message string) {
+	iss.MarkFalse(ISBSvcConditionDeployed, reason, message)
+	iss.SetPhase(ISBSvcPhaseFailed, message)
+}
+
+// SetObservedGeneration sets the Status ObservedGeneration
+func (iss *InterStepBufferServiceStatus) SetObservedGeneration(value int64) {
+	iss.ObservedGeneration = value
+}
+
+// IsHealthy indicates whether the InterStepBufferService is healthy or not
+func (iss *InterStepBufferServiceStatus) IsHealthy() bool {
+	if iss.Phase != ISBSvcPhaseRunning {
+		return false
+	}
+	return iss.IsReady()
+}
+
+// MarkChildrenResourceUnHealthy marks the children resources as not healthy
+func (iss *InterStepBufferServiceStatus) MarkChildrenResourceUnHealthy(reason, message string) {
+	iss.MarkFalse(ISBSvcConditionChildrenResourcesHealthy, reason, message)
+	iss.Message = reason + ": " + message
+}
+
+// MarkChildrenResourceHealthy marks the children resources as healthy
+func (iss *InterStepBufferServiceStatus) MarkChildrenResourceHealthy(reason, message string) {
+	iss.MarkTrueWithReason(ISBSvcConditionChildrenResourcesHealthy, reason, message)
 }

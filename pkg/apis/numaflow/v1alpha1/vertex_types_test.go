@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
+	resource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 )
@@ -121,7 +122,7 @@ func TestWithoutReplicas(t *testing.T) {
 	s := &VertexSpec{
 		Replicas: ptr.To[int32](3),
 	}
-	assert.Equal(t, int32(0), *s.WithOutReplicas().Replicas)
+	assert.Equal(t, int32(0), *s.DeepCopyWithoutReplicas().Replicas)
 }
 
 func TestGetVertexReplicas(t *testing.T) {
@@ -198,7 +199,15 @@ func TestGetPodSpec(t *testing.T) {
 			{Name: "test-env", Value: "test-val"},
 		},
 		SideInputsStoreName: "test-store",
+		DefaultResources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("100Mi"),
+			},
+			Limits: corev1.ResourceList{},
+		},
 	}
+
 	t.Run("test source", func(t *testing.T) {
 		testObj := testVertex.DeepCopy()
 		testObj.Spec.Source = &Source{}
@@ -214,6 +223,18 @@ func TestGetPodSpec(t *testing.T) {
 			AutomountServiceAccountToken: ptr.To[bool](true),
 			DNSPolicy:                    corev1.DNSClusterFirstWithHostNet,
 			DNSConfig:                    &corev1.PodDNSConfig{Nameservers: []string{"aaa.aaa"}},
+		}
+		testObj.Spec.ContainerTemplate = &ContainerTemplate{
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("200m"),
+					corev1.ResourceMemory: resource.MustParse("200Mi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("200m"),
+					corev1.ResourceMemory: resource.MustParse("200Mi"),
+				},
+			},
 		}
 		s, err := testObj.GetPodSpec(req)
 		assert.NoError(t, err)
@@ -252,11 +273,33 @@ func TestGetPodSpec(t *testing.T) {
 		assert.Contains(t, s.Containers[0].Args, "--type="+string(VertexTypeSource))
 		assert.Equal(t, 1, len(s.InitContainers))
 		assert.Equal(t, CtrInit, s.InitContainers[0].Name)
+		assert.Equal(t, "200m", s.Containers[0].Resources.Requests.Cpu().String())
+		assert.Equal(t, "200m", s.Containers[0].Resources.Limits.Cpu().String())
+		assert.Equal(t, "200Mi", s.Containers[0].Resources.Requests.Memory().String())
+		assert.Equal(t, "200Mi", s.Containers[0].Resources.Limits.Memory().String())
+		assert.Equal(t, "100m", s.InitContainers[0].Resources.Requests.Cpu().String())
+		assert.Equal(t, "100Mi", s.InitContainers[0].Resources.Requests.Memory().String())
+		assert.Equal(t, "0", s.InitContainers[0].Resources.Limits.Cpu().String())
+		assert.Equal(t, "0", s.InitContainers[0].Resources.Limits.Memory().String())
 	})
 
 	t.Run("test sink", func(t *testing.T) {
 		testObj := testVertex.DeepCopy()
 		testObj.Spec.Sink = &Sink{}
+		testObj.Spec.ContainerTemplate = &ContainerTemplate{
+			ReadinessProbe: &Probe{
+				InitialDelaySeconds: ptr.To[int32](24),
+				PeriodSeconds:       ptr.To[int32](25),
+				FailureThreshold:    ptr.To[int32](2),
+				TimeoutSeconds:      ptr.To[int32](21),
+			},
+			LivenessProbe: &Probe{
+				InitialDelaySeconds: ptr.To[int32](14),
+				PeriodSeconds:       ptr.To[int32](15),
+				FailureThreshold:    ptr.To[int32](2),
+				TimeoutSeconds:      ptr.To[int32](11),
+			},
+		}
 		s, err := testObj.GetPodSpec(req)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(s.Containers))
@@ -265,10 +308,20 @@ func TestGetPodSpec(t *testing.T) {
 		assert.Equal(t, corev1.PullIfNotPresent, s.Containers[0].ImagePullPolicy)
 		assert.NotNil(t, s.Containers[0].ReadinessProbe)
 		assert.NotNil(t, s.Containers[0].ReadinessProbe.HTTPGet)
+		assert.Equal(t, "/readyz", s.Containers[0].ReadinessProbe.HTTPGet.Path)
+		assert.Equal(t, int32(24), s.Containers[0].ReadinessProbe.InitialDelaySeconds)
+		assert.Equal(t, int32(25), s.Containers[0].ReadinessProbe.PeriodSeconds)
+		assert.Equal(t, int32(2), s.Containers[0].ReadinessProbe.FailureThreshold)
+		assert.Equal(t, int32(21), s.Containers[0].ReadinessProbe.TimeoutSeconds)
 		assert.Equal(t, corev1.URISchemeHTTPS, s.Containers[0].ReadinessProbe.HTTPGet.Scheme)
 		assert.Equal(t, VertexMetricsPort, s.Containers[0].ReadinessProbe.HTTPGet.Port.IntValue())
 		assert.NotNil(t, s.Containers[0].LivenessProbe)
 		assert.NotNil(t, s.Containers[0].LivenessProbe.HTTPGet)
+		assert.Equal(t, "/livez", s.Containers[0].LivenessProbe.HTTPGet.Path)
+		assert.Equal(t, int32(14), s.Containers[0].LivenessProbe.InitialDelaySeconds)
+		assert.Equal(t, int32(15), s.Containers[0].LivenessProbe.PeriodSeconds)
+		assert.Equal(t, int32(2), s.Containers[0].LivenessProbe.FailureThreshold)
+		assert.Equal(t, int32(11), s.Containers[0].LivenessProbe.TimeoutSeconds)
 		assert.Equal(t, corev1.URISchemeHTTPS, s.Containers[0].LivenessProbe.HTTPGet.Scheme)
 		assert.Equal(t, VertexMetricsPort, s.Containers[0].LivenessProbe.HTTPGet.Port.IntValue())
 		assert.Equal(t, 1, len(s.Containers[0].Ports))
@@ -295,7 +348,7 @@ func TestGetPodSpec(t *testing.T) {
 		testObj.Spec.Sink = &Sink{
 			AbstractSink: AbstractSink{
 				UDSink: &UDSink{
-					Container: Container{
+					Container: &Container{
 						Image:   "image",
 						Command: []string{"cmd"},
 						Args:    []string{"arg0"},
@@ -417,6 +470,54 @@ func TestGetPodSpec(t *testing.T) {
 		assert.Equal(t, CtrInit, s.InitContainers[0].Name)
 		assert.Equal(t, CtrInitSideInputs, s.InitContainers[1].Name)
 	})
+
+	t.Run("test serving source", func(t *testing.T) {
+		testObj := testVertex.DeepCopy()
+		testObj.Spec.Source = &Source{
+			Serving: &ServingSource{
+				Store: &ServingStore{},
+			},
+		}
+		s, err := testObj.GetPodSpec(req)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(s.Containers))
+		assert.Equal(t, CtrMain, s.Containers[0].Name)
+		assert.Equal(t, testFlowImage, s.Containers[0].Image)
+		assert.Equal(t, corev1.PullIfNotPresent, s.Containers[0].ImagePullPolicy)
+		var envNames []string
+		for _, e := range s.Containers[0].Env {
+			envNames = append(envNames, e.Name)
+		}
+		assert.Contains(t, envNames, "test-env")
+		assert.Contains(t, envNames, EnvNamespace)
+		assert.Contains(t, envNames, EnvPod)
+		assert.Contains(t, envNames, EnvPipelineName)
+		assert.Contains(t, envNames, EnvVertexName)
+		assert.Contains(t, envNames, EnvVertexObject)
+		assert.Contains(t, envNames, EnvReplica)
+		assert.Contains(t, s.Containers[0].Args, "processor")
+		assert.Contains(t, s.Containers[0].Args, "--type="+string(VertexTypeSource))
+		assert.Equal(t, 1, len(s.InitContainers))
+		assert.Equal(t, CtrInit, s.InitContainers[0].Name)
+
+		assert.Equal(t, CtrServing, s.Containers[1].Name)
+		assert.Equal(t, "test-f-image", s.Containers[1].Image)
+		assert.Equal(t, corev1.PullIfNotPresent, s.Containers[1].ImagePullPolicy)
+		envNames = []string{}
+		for _, e := range s.Containers[1].Env {
+			envNames = append(envNames, e.Name)
+		}
+		assert.Contains(t, envNames, "test-env")
+		assert.Contains(t, envNames, EnvNamespace)
+		assert.Contains(t, envNames, EnvPod)
+		assert.Contains(t, envNames, EnvPipelineName)
+		assert.Contains(t, envNames, EnvVertexName)
+		assert.Contains(t, envNames, EnvReplica)
+		assert.Contains(t, envNames, EnvServingJetstreamStream)
+		assert.Contains(t, envNames, EnvServingHostIP)
+		assert.Contains(t, envNames, EnvServingObject)
+		assert.Contains(t, envNames, EnvServingMinPipelineSpec)
+	})
 }
 
 func Test_getType(t *testing.T) {
@@ -444,8 +545,8 @@ func Test_getType(t *testing.T) {
 
 func TestVertexMarkPhase(t *testing.T) {
 	s := VertexStatus{}
-	s.MarkPhase(VertexPhasePending, "reason", "message")
-	assert.Equal(t, VertexPhasePending, s.Phase)
+	s.MarkPhase(VertexPhaseRunning, "reason", "message")
+	assert.Equal(t, VertexPhaseRunning, s.Phase)
 	assert.Equal(t, "reason", s.Reason)
 	assert.Equal(t, "message", s.Message)
 }
@@ -462,6 +563,66 @@ func TestVertexMarkPhaseFailed(t *testing.T) {
 	assert.Equal(t, VertexPhaseFailed, s.Phase)
 	assert.Equal(t, "reason", s.Reason)
 	assert.Equal(t, "message", s.Message)
+}
+
+func Test_VertexMarkPodNotHealthy(t *testing.T) {
+	s := VertexStatus{}
+	s.MarkPodNotHealthy("reason", "message")
+	for _, c := range s.Conditions {
+		if c.Type == string(VertexConditionPodsHealthy) {
+			assert.Equal(t, metav1.ConditionFalse, c.Status)
+			assert.Equal(t, "reason", c.Reason)
+			assert.Equal(t, "message", c.Message)
+		}
+	}
+}
+
+func Test_VertexMarkPodHealthy(t *testing.T) {
+	s := VertexStatus{}
+	s.MarkPodHealthy("reason", "message")
+	for _, c := range s.Conditions {
+		if c.Type == string(VertexConditionPodsHealthy) {
+			assert.Equal(t, metav1.ConditionTrue, c.Status)
+			assert.Equal(t, "reason", c.Reason)
+			assert.Equal(t, "message", c.Message)
+		}
+	}
+}
+
+func Test_VertexMarkDeployed(t *testing.T) {
+	s := VertexStatus{}
+	s.MarkDeployed()
+	for _, c := range s.Conditions {
+		if c.Type == string(VertexConditionDeployed) {
+			assert.Equal(t, metav1.ConditionTrue, c.Status)
+			assert.Equal(t, "Successful", c.Reason)
+			assert.Equal(t, "Successful", c.Message)
+		}
+	}
+}
+
+func Test_VertexMarkDeployFailed(t *testing.T) {
+	s := VertexStatus{}
+	s.MarkDeployFailed("reason", "message")
+	assert.Equal(t, VertexPhaseFailed, s.Phase)
+	assert.Equal(t, "reason", s.Reason)
+	assert.Equal(t, "message", s.Message)
+	for _, c := range s.Conditions {
+		if c.Type == string(VertexConditionDeployed) {
+			assert.Equal(t, metav1.ConditionFalse, c.Status)
+			assert.Equal(t, "reason", c.Reason)
+			assert.Equal(t, "message", c.Message)
+		}
+	}
+}
+
+func Test_VertexInitConditions(t *testing.T) {
+	v := VertexStatus{}
+	v.InitConditions()
+	assert.Equal(t, 2, len(v.Conditions))
+	for _, c := range v.Conditions {
+		assert.Equal(t, metav1.ConditionUnknown, c.Status)
+	}
 }
 
 func Test_VertexIsSource(t *testing.T) {
@@ -567,47 +728,6 @@ func TestScalable(t *testing.T) {
 	assert.True(t, v.Scalable())
 }
 
-func Test_Scale_Parameters(t *testing.T) {
-	s := Scale{}
-	assert.Equal(t, int32(0), s.GetMinReplicas())
-	assert.Equal(t, int32(DefaultMaxReplicas), s.GetMaxReplicas())
-	assert.Equal(t, DefaultCooldownSeconds, s.GetScaleUpCooldownSeconds())
-	assert.Equal(t, DefaultCooldownSeconds, s.GetScaleDownCooldownSeconds())
-	assert.Equal(t, DefaultLookbackSeconds, s.GetLookbackSeconds())
-	assert.Equal(t, DefaultReplicasPerScale, s.GetReplicasPerScale())
-	assert.Equal(t, DefaultTargetBufferAvailability, s.GetTargetBufferAvailability())
-	assert.Equal(t, DefaultTargetProcessingSeconds, s.GetTargetProcessingSeconds())
-	assert.Equal(t, DefaultZeroReplicaSleepSeconds, s.GetZeroReplicaSleepSeconds())
-	upcds := uint32(100)
-	downcds := uint32(99)
-	lbs := uint32(101)
-	rps := uint32(3)
-	tps := uint32(102)
-	tbu := uint32(33)
-	zrss := uint32(44)
-	s = Scale{
-		Min:                      ptr.To[int32](2),
-		Max:                      ptr.To[int32](4),
-		ScaleUpCooldownSeconds:   &upcds,
-		ScaleDownCooldownSeconds: &downcds,
-		LookbackSeconds:          &lbs,
-		ReplicasPerScale:         &rps,
-		TargetProcessingSeconds:  &tps,
-		TargetBufferAvailability: &tbu,
-		ZeroReplicaSleepSeconds:  &zrss,
-	}
-	assert.Equal(t, int32(2), s.GetMinReplicas())
-	assert.Equal(t, int32(4), s.GetMaxReplicas())
-	assert.Equal(t, int(upcds), s.GetScaleUpCooldownSeconds())
-	assert.Equal(t, int(downcds), s.GetScaleDownCooldownSeconds())
-	assert.Equal(t, int(lbs), s.GetLookbackSeconds())
-	assert.Equal(t, int(rps), s.GetReplicasPerScale())
-	assert.Equal(t, int(tbu), s.GetTargetBufferAvailability())
-	assert.Equal(t, int(tps), s.GetTargetProcessingSeconds())
-	assert.Equal(t, int(zrss), s.GetZeroReplicaSleepSeconds())
-	s.Max = ptr.To[int32](500)
-	assert.Equal(t, int32(500), s.GetMaxReplicas())
-}
 func Test_GetVertexType(t *testing.T) {
 	t.Run("source vertex", func(t *testing.T) {
 		v := Vertex{
@@ -705,4 +825,75 @@ func Test_GetToBuckets(t *testing.T) {
 		buckets := v.GetToBuckets()
 		assert.Len(t, buckets, 0)
 	})
+}
+
+func TestGetServingSourceStreamName(t *testing.T) {
+	v := Vertex{
+		Spec: VertexSpec{
+			PipelineName: "test-pipeline",
+			AbstractVertex: AbstractVertex{
+				Name: "test-vertex",
+			},
+		},
+	}
+	expected := "test-pipeline-test-vertex-serving-source"
+	assert.Equal(t, expected, v.GetServingSourceStreamName())
+}
+
+func Test_VertexStatus_IsHealthy(t *testing.T) {
+	tests := []struct {
+		name  string
+		phase VertexPhase
+		ready bool
+		want  bool
+	}{
+		{
+			name:  "Failed phase",
+			phase: VertexPhaseFailed,
+			ready: false,
+			want:  false,
+		},
+		{
+			name:  "Running phase and ready",
+			phase: VertexPhaseRunning,
+			ready: true,
+			want:  true,
+		},
+		{
+			name:  "Running phase and not ready",
+			phase: VertexPhaseRunning,
+			ready: false,
+			want:  false,
+		},
+		{
+			name:  "Failed phase",
+			phase: VertexPhaseFailed,
+			ready: false,
+			want:  false,
+		},
+		{
+			name:  "Unknown phase",
+			phase: VertexPhaseUnknown,
+			ready: false,
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vertex := &VertexStatus{
+				Phase: tt.phase,
+			}
+			if tt.ready {
+				vertex.Conditions = []metav1.Condition{
+					{
+						Type:   string(VertexConditionPodsHealthy),
+						Status: metav1.ConditionTrue,
+					},
+				}
+			}
+			got := vertex.IsHealthy()
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

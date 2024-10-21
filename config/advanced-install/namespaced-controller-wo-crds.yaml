@@ -25,6 +25,10 @@ rules:
   - vertices/finalizers
   - vertices/status
   - vertices/scale
+  - monovertices
+  - monovertices/finalizers
+  - monovertices/status
+  - monovertices/scale
   verbs:
   - create
   - delete
@@ -133,6 +137,8 @@ metadata:
 apiVersion: v1
 data:
   controller-config.yaml: |
+    # "instance" configuration can be used to run multiple Numaflow controllers, check details at https://numaflow.numaproj.io/operations/installation/#multiple-controllers
+    instance: ""
     defaults:
       containerResources: |
         requests:

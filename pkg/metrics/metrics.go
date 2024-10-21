@@ -22,11 +22,16 @@ import (
 )
 
 const (
+	LabelVersion            = "version"
+	LabelPlatform           = "platform"
+	LabelNamespace          = "ns"
+	LabelISBService         = "isbsvc"
 	LabelPipeline           = "pipeline"
 	LabelVertex             = "vertex"
 	LabelVertexReplicaIndex = "replica"
 	LabelVertexType         = "vertex_type"
 	LabelPartitionName      = "partition_name"
+	LabelMonoVertexName     = "mvtx_name"
 
 	LabelReason = "reason"
 )
@@ -54,6 +59,12 @@ var (
 		Help:      "Total number of bytes read",
 	}, []string{LabelVertex, LabelPipeline, LabelVertexType, LabelVertexReplicaIndex, LabelPartitionName})
 
+	ReadDataBytesCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Subsystem: "forwarder",
+		Name:      "data_read_bytes_total",
+		Help:      "Total number of Data message bytes read",
+	}, []string{LabelVertex, LabelPipeline, LabelVertexType, LabelVertexReplicaIndex, LabelPartitionName})
+
 	// ReadMessagesError is used to indicate the number of errors messages read
 	ReadMessagesError = promauto.NewCounterVec(prometheus.CounterOpts{
 		Subsystem: "forwarder",
@@ -75,7 +86,7 @@ var (
 		Help:      "Total number of bytes written",
 	}, []string{LabelVertex, LabelPipeline, LabelVertexType, LabelVertexReplicaIndex, LabelPartitionName})
 
-	// WriteMessagesError is used to indicate the number of errors messages written
+	// WriteMessagesError is used to indicate the number of errors encountered while writing messages
 	WriteMessagesError = promauto.NewCounterVec(prometheus.CounterOpts{
 		Subsystem: "forwarder",
 		Name:      "write_error_total",
@@ -161,6 +172,12 @@ var (
 		Name:      "udf_write_total",
 		Help:      "Total number of Messages Written by UDF",
 	}, []string{LabelVertex, LabelPipeline, LabelVertexType, LabelVertexReplicaIndex, LabelPartitionName})
+
+	UserDroppedMessages = promauto.NewCounterVec(prometheus.CounterOpts{
+		Subsystem: "forwarder",
+		Name:      "ud_drop_total",
+		Help:      "Total messages dropped by the user",
+	}, []string{LabelVertex, LabelPipeline, LabelVertexType, LabelVertexReplicaIndex})
 )
 
 // Source forwarder specific metrics
@@ -279,5 +296,29 @@ var (
 		Subsystem: "idlemanager",
 		Name:      "ctrl_msg_total",
 		Help:      "Total number of ctrl Messages sent",
+	}, []string{LabelVertex, LabelPipeline, LabelVertexType, LabelVertexReplicaIndex, LabelPartitionName})
+)
+
+// Sink forwarder metrics
+var (
+	// FbSinkWriteMessagesCount is used to indicate the number of messages written to a fallback sink
+	FbSinkWriteMessagesCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Subsystem: "forwarder",
+		Name:      "fbsink_write_total",
+		Help:      "Total number of Messages written to a fallback sink",
+	}, []string{LabelVertex, LabelPipeline, LabelVertexType, LabelVertexReplicaIndex, LabelPartitionName})
+
+	// FbSinkWriteBytesCount is to indicate the number of bytes written to a fallback sink
+	FbSinkWriteBytesCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Subsystem: "forwarder",
+		Name:      "fbsink_write_bytes_total",
+		Help:      "Total number of bytes written to a fallback sink",
+	}, []string{LabelVertex, LabelPipeline, LabelVertexType, LabelVertexReplicaIndex, LabelPartitionName})
+
+	// FbSinkWriteMessagesError is used to indicate the number of errors while writing to a fallback sink
+	FbSinkWriteMessagesError = promauto.NewCounterVec(prometheus.CounterOpts{
+		Subsystem: "forwarder",
+		Name:      "fbsink_write_error_total",
+		Help:      "Total number of Write Errors while writing to a fallback sink",
 	}, []string{LabelVertex, LabelPipeline, LabelVertexType, LabelVertexReplicaIndex, LabelPartitionName})
 )

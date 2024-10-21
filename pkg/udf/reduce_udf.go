@@ -19,14 +19,11 @@ package udf
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/numaproj/numaflow-go/pkg/info"
 	"go.uber.org/zap"
-
-	alignedfs "github.com/numaproj/numaflow/pkg/reduce/pbq/wal/aligned/fs"
-	noopwal "github.com/numaproj/numaflow/pkg/reduce/pbq/wal/noop"
 
 	dfv1 "github.com/numaproj/numaflow/pkg/apis/numaflow/v1alpha1"
 	"github.com/numaproj/numaflow/pkg/forwarder"
@@ -35,12 +32,14 @@ import (
 	"github.com/numaproj/numaflow/pkg/reduce"
 	"github.com/numaproj/numaflow/pkg/reduce/applier"
 	"github.com/numaproj/numaflow/pkg/reduce/pbq"
+	alignedfs "github.com/numaproj/numaflow/pkg/reduce/pbq/wal/aligned/fs"
+	noopwal "github.com/numaproj/numaflow/pkg/reduce/pbq/wal/noop"
 	"github.com/numaproj/numaflow/pkg/reduce/pbq/wal/unaligned"
 	unalignedfs "github.com/numaproj/numaflow/pkg/reduce/pbq/wal/unaligned/fs"
 	"github.com/numaproj/numaflow/pkg/reduce/pnf"
 	"github.com/numaproj/numaflow/pkg/sdkclient"
 	"github.com/numaproj/numaflow/pkg/sdkclient/reducer"
-	sdkserverinfo "github.com/numaproj/numaflow/pkg/sdkclient/serverinfo"
+	"github.com/numaproj/numaflow/pkg/sdkclient/serverinfo"
 	"github.com/numaproj/numaflow/pkg/sdkclient/sessionreducer"
 	jsclient "github.com/numaproj/numaflow/pkg/shared/clients/nats"
 	"github.com/numaproj/numaflow/pkg/shared/logging"
@@ -93,19 +92,19 @@ func (u *ReduceUDFProcessor) Start(ctx context.Context) error {
 
 	// create udf handler and wait until it is ready
 	if windowType.Fixed != nil || windowType.Sliding != nil {
-		var serverInfo *info.ServerInfo
+		var serverInfo *serverinfo.ServerInfo
 		var client reducer.Client
 		// if streaming is enabled, use the reduceStreaming address
 		if (windowType.Fixed != nil && windowType.Fixed.Streaming) || (windowType.Sliding != nil && windowType.Sliding.Streaming) {
 			// Wait for server info to be ready
-			serverInfo, err = sdkserverinfo.SDKServerInfo(sdkserverinfo.WithServerInfoFilePath(sdkclient.ReduceStreamServerInfoFile))
+			serverInfo, err = serverinfo.SDKServerInfo(serverinfo.WithServerInfoFilePath(sdkclient.ReduceStreamServerInfoFile))
 			if err != nil {
 				return err
 			}
 			client, err = reducer.New(serverInfo, sdkclient.WithMaxMessageSize(maxMessageSize), sdkclient.WithUdsSockAddr(sdkclient.ReduceStreamAddr))
 		} else {
 			// Wait for server info to be ready
-			serverInfo, err = sdkserverinfo.SDKServerInfo(sdkserverinfo.WithServerInfoFilePath(sdkclient.ReduceServerInfoFile))
+			serverInfo, err = serverinfo.SDKServerInfo(serverinfo.WithServerInfoFilePath(sdkclient.ReduceServerInfoFile))
 			if err != nil {
 				return err
 			}
@@ -131,7 +130,7 @@ func (u *ReduceUDFProcessor) Start(ctx context.Context) error {
 		healthChecker = reduceHandler
 	} else if windowType.Session != nil {
 		// Wait for server info to be ready
-		serverInfo, err := sdkserverinfo.SDKServerInfo(sdkserverinfo.WithServerInfoFilePath(sdkclient.SessionReduceServerInfoFile))
+		serverInfo, err := serverinfo.SDKServerInfo(serverinfo.WithServerInfoFilePath(sdkclient.SessionReduceServerInfoFile))
 		if err != nil {
 			return err
 		}
@@ -237,7 +236,7 @@ func (u *ReduceUDFProcessor) Start(ctx context.Context) error {
 	for _, edge := range u.VertexInstance.Vertex.Spec.ToEdges {
 		if edge.GetToVertexPartitionCount() > 1 {
 			s := shuffle.NewShuffle(edge.To, edge.GetToVertexPartitionCount())
-			shuffleFuncMap[fmt.Sprintf("%s:%s", edge.From, edge.To)] = s
+			shuffleFuncMap[edge.From+":"+edge.To] = s
 		}
 	}
 
@@ -247,12 +246,18 @@ func (u *ReduceUDFProcessor) Start(ctx context.Context) error {
 
 		// Drop message if it contains the special tag
 		if sharedutil.StringSliceContains(tags, dfv1.MessageTagDrop) {
+			metrics.UserDroppedMessages.With(map[string]string{
+				metrics.LabelVertex:             vertexName,
+				metrics.LabelPipeline:           pipelineName,
+				metrics.LabelVertexType:         string(dfv1.VertexTypeReduceUDF),
+				metrics.LabelVertexReplicaIndex: strconv.Itoa(int(u.VertexInstance.Replica)),
+			}).Inc()
 			return result, nil
 		}
 
 		// Iterate through the edges
 		for _, edge := range u.VertexInstance.Vertex.Spec.ToEdges {
-			edgeKey := fmt.Sprintf("%s:%s", edge.From, edge.To)
+			edgeKey := edge.From + ":" + edge.To
 
 			// Condition to proceed for forwarding message: No conditions on edge, or message tags match edge conditions
 			proceed := edge.Conditions == nil || edge.Conditions.Tags == nil || len(edge.Conditions.Tags.Values) == 0 || sharedutil.CompareSlice(edge.Conditions.Tags.GetOperator(), tags, edge.Conditions.Tags.Values)

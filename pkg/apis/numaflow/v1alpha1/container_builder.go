@@ -25,7 +25,7 @@ func (b containerBuilder) init(req getContainerReq) containerBuilder {
 	b.Image = req.image
 	b.ImagePullPolicy = req.imagePullPolicy
 	b.Name = CtrMain
-	b.Resources = req.resources
+	b.Resources = *req.resources.DeepCopy()
 	b.VolumeMounts = req.volumeMounts
 	return b
 }
@@ -67,6 +67,11 @@ func (b containerBuilder) appendEnvFrom(x ...corev1.EnvFromSource) containerBuil
 
 func (b containerBuilder) appendEnv(x ...corev1.EnvVar) containerBuilder {
 	b.Env = append(b.Env, x...)
+	return b
+}
+
+func (b containerBuilder) appendPorts(x ...corev1.ContainerPort) containerBuilder {
+	b.Ports = append(b.Ports, x...)
 	return b
 }
 

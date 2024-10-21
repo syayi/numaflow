@@ -148,7 +148,6 @@ func NewMetricsServer(vertex *dfv1.Vertex, opts ...Option) *metricsServer {
 	if m.lagReaders != nil {
 		for partitionName := range m.lagReaders {
 			m.partitionPendingInfo[partitionName] = sharedqueue.New[timestampedPending](1800)
-
 		}
 	}
 	return m
@@ -242,6 +241,14 @@ func (ms *metricsServer) Start(ctx context.Context) (func(ctx context.Context) e
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		for _, ex := range ms.healthCheckExecutors {
+			if err := ex(); err != nil {
+				log.Errorw("Failed to execute sidecar health check", zap.Error(err))
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(err.Error()))
+				return
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, r *http.Request) {

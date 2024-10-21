@@ -41,6 +41,8 @@ type Source struct {
 	UDSource *UDSource `json:"udsource,omitempty" protobuf:"bytes,6,opt,name=udSource"`
 	// +optional
 	JetStream *JetStreamSource `json:"jetstream,omitempty" protobuf:"bytes,7,opt,name=jetstream"`
+	// +optional
+	Serving *ServingSource `json:"serving,omitempty" protobuf:"bytes,8,opt,name=serving"`
 }
 
 func (s Source) getContainers(req getContainerReq) ([]corev1.Container, error) {
@@ -94,12 +96,20 @@ func (s Source) getUDTransformerContainer(mainContainerReq getContainerReq) core
 		c = c.image(mainContainerReq.image).args(args...) // Use the same image as the main container
 	}
 	if x := s.UDTransformer.Container; x != nil {
-		c = c.appendEnv(x.Env...).appendVolumeMounts(x.VolumeMounts...).resources(x.Resources).securityContext(x.SecurityContext).appendEnvFrom(x.EnvFrom...)
+		c = c.appendEnv(x.Env...).appendVolumeMounts(x.VolumeMounts...).resources(x.Resources).securityContext(x.SecurityContext).appendEnvFrom(x.EnvFrom...).appendPorts(x.Ports...)
 		if x.ImagePullPolicy != nil {
 			c = c.imagePullPolicy(*x.ImagePullPolicy)
 		}
 	}
 	container := c.build()
+
+	var initialDelaySeconds, periodSeconds, timeoutSeconds, failureThreshold int32 = UDContainerLivezInitialDelaySeconds, UDContainerLivezPeriodSeconds, UDContainerLivezTimeoutSeconds, UDContainerLivezFailureThreshold
+	if x := s.UDTransformer.Container; x != nil {
+		initialDelaySeconds = GetProbeInitialDelaySecondsOr(x.LivenessProbe, initialDelaySeconds)
+		periodSeconds = GetProbePeriodSecondsOr(x.LivenessProbe, periodSeconds)
+		timeoutSeconds = GetProbeTimeoutSecondsOr(x.LivenessProbe, timeoutSeconds)
+		failureThreshold = GetProbeFailureThresholdOr(x.LivenessProbe, failureThreshold)
+	}
 	container.LivenessProbe = &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
@@ -108,9 +118,10 @@ func (s Source) getUDTransformerContainer(mainContainerReq getContainerReq) core
 				Scheme: corev1.URISchemeHTTPS,
 			},
 		},
-		InitialDelaySeconds: 30,
-		PeriodSeconds:       60,
-		TimeoutSeconds:      30,
+		InitialDelaySeconds: initialDelaySeconds,
+		PeriodSeconds:       periodSeconds,
+		TimeoutSeconds:      timeoutSeconds,
+		FailureThreshold:    failureThreshold,
 	}
 	return container
 }
@@ -131,12 +142,20 @@ func (s Source) getUDSourceContainer(mainContainerReq getContainerReq) corev1.Co
 		}
 	}
 	if x := s.UDSource.Container; x != nil {
-		c = c.appendEnv(x.Env...).appendVolumeMounts(x.VolumeMounts...).resources(x.Resources).securityContext(x.SecurityContext).appendEnvFrom(x.EnvFrom...)
+		c = c.appendEnv(x.Env...).appendVolumeMounts(x.VolumeMounts...).resources(x.Resources).securityContext(x.SecurityContext).appendEnvFrom(x.EnvFrom...).appendPorts(x.Ports...)
 		if x.ImagePullPolicy != nil {
 			c = c.imagePullPolicy(*x.ImagePullPolicy)
 		}
 	}
 	container := c.build()
+
+	var initialDelaySeconds, periodSeconds, timeoutSeconds, failureThreshold int32 = UDContainerLivezInitialDelaySeconds, UDContainerLivezPeriodSeconds, UDContainerLivezTimeoutSeconds, UDContainerLivezFailureThreshold
+	if x := s.UDSource.Container; x != nil {
+		initialDelaySeconds = GetProbeInitialDelaySecondsOr(x.LivenessProbe, initialDelaySeconds)
+		periodSeconds = GetProbePeriodSecondsOr(x.LivenessProbe, periodSeconds)
+		timeoutSeconds = GetProbeTimeoutSecondsOr(x.LivenessProbe, timeoutSeconds)
+		failureThreshold = GetProbeFailureThresholdOr(x.LivenessProbe, failureThreshold)
+	}
 	container.LivenessProbe = &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
@@ -145,9 +164,10 @@ func (s Source) getUDSourceContainer(mainContainerReq getContainerReq) corev1.Co
 				Scheme: corev1.URISchemeHTTPS,
 			},
 		},
-		InitialDelaySeconds: 30,
-		PeriodSeconds:       60,
-		TimeoutSeconds:      30,
+		InitialDelaySeconds: initialDelaySeconds,
+		PeriodSeconds:       periodSeconds,
+		TimeoutSeconds:      timeoutSeconds,
+		FailureThreshold:    failureThreshold,
 	}
 	return container
 }

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -33,7 +34,7 @@ import (
 	"github.com/numaproj/numaflow/pkg/isbsvc"
 	"github.com/numaproj/numaflow/pkg/metrics"
 	"github.com/numaproj/numaflow/pkg/sdkclient"
-	sdkserverinfo "github.com/numaproj/numaflow/pkg/sdkclient/serverinfo"
+	"github.com/numaproj/numaflow/pkg/sdkclient/serverinfo"
 	sourceclient "github.com/numaproj/numaflow/pkg/sdkclient/source"
 	"github.com/numaproj/numaflow/pkg/sdkclient/sourcetransformer"
 	"github.com/numaproj/numaflow/pkg/shared/callback"
@@ -195,12 +196,12 @@ func (sp *SourceProcessor) Start(ctx context.Context) error {
 	var udsGRPCClient *udsource.GRPCBasedUDSource
 	if sp.VertexInstance.Vertex.IsUDSource() {
 		// Wait for server info to be ready
-		serverInfo, err := sdkserverinfo.SDKServerInfo(sdkserverinfo.WithServerInfoFilePath(sdkclient.SourceServerInfoFile))
+		serverInfo, err := serverinfo.SDKServerInfo(serverinfo.WithServerInfoFilePath(sdkclient.SourceServerInfoFile))
 		if err != nil {
 			return err
 		}
 
-		srcClient, err := sourceclient.New(serverInfo, sdkclient.WithMaxMessageSize(maxMessageSize))
+		srcClient, err := sourceclient.New(ctx, serverInfo, sdkclient.WithMaxMessageSize(maxMessageSize))
 		if err != nil {
 			return fmt.Errorf("failed to create a new gRPC client: %w", err)
 		}
@@ -234,12 +235,12 @@ func (sp *SourceProcessor) Start(ctx context.Context) error {
 
 	if sp.VertexInstance.Vertex.HasUDTransformer() {
 		// Wait for server info to be ready
-		serverInfo, err := sdkserverinfo.SDKServerInfo(sdkserverinfo.WithServerInfoFilePath(sdkclient.SourceTransformerServerInfoFile))
+		serverInfo, err := serverinfo.SDKServerInfo(serverinfo.WithServerInfoFilePath(sdkclient.SourceTransformerServerInfoFile))
 		if err != nil {
 			return err
 		}
 
-		srcTransformerClient, err := sourcetransformer.New(serverInfo, sdkclient.WithMaxMessageSize(maxMessageSize))
+		srcTransformerClient, err := sourcetransformer.New(ctx, serverInfo, sdkclient.WithMaxMessageSize(maxMessageSize))
 		if err != nil {
 			return fmt.Errorf("failed to create transformer gRPC client, %w", err)
 		}
@@ -356,6 +357,8 @@ func (sp *SourceProcessor) createSourceReader(ctx context.Context, udsGRPCClient
 		return nats.New(ctx, sp.VertexInstance, nats.WithReadTimeout(readTimeout))
 	} else if x := src.JetStream; x != nil {
 		return jetstreamsrc.New(ctx, sp.VertexInstance, jetstreamsrc.WithReadTimeout(readTimeout))
+	} else if x := src.Serving; x != nil {
+		return jetstreamsrc.New(ctx, sp.VertexInstance, jetstreamsrc.WithReadTimeout(readTimeout), jetstreamsrc.WithServingEnabled())
 	}
 	return nil, fmt.Errorf("invalid source spec")
 }
@@ -367,12 +370,11 @@ func (sp *SourceProcessor) getSourceGoWhereDecider(shuffleFuncMap map[string]*sh
 
 		// Iterate through the edges
 		for _, edge := range sp.VertexInstance.Vertex.Spec.ToEdges {
-			edgeKey := fmt.Sprintf("%s:%s", edge.From, edge.To)
-
 			// if the edge has more than one partition, shuffle the message
 			// else forward the message to the default partition
 			partitionIdx := isb.DefaultPartitionIdx
 			if edge.GetToVertexPartitionCount() > 1 {
+				edgeKey := edge.From + ":" + edge.To
 				if edge.ToVertexType == dfv1.VertexTypeReduceUDF { // Shuffle on keys
 					partitionIdx = shuffleFuncMap[edgeKey].ShuffleOnKeys(keys)
 				} else { // Shuffle on msgId
@@ -398,13 +400,18 @@ func (sp *SourceProcessor) getTransformerGoWhereDecider(shuffleFuncMap map[strin
 
 		// Drop message if it contains the special tag
 		if sharedutil.StringSliceContains(tags, dfv1.MessageTagDrop) {
+			metrics.UserDroppedMessages.With(map[string]string{
+				metrics.LabelVertex:             sp.VertexInstance.Vertex.Spec.Name,
+				metrics.LabelPipeline:           sp.VertexInstance.Vertex.Spec.PipelineName,
+				metrics.LabelVertexType:         string(dfv1.VertexTypeSource),
+				metrics.LabelVertexReplicaIndex: strconv.Itoa(int(sp.VertexInstance.Replica)),
+			}).Inc()
+
 			return result, nil
 		}
 
 		// Iterate through the edges
 		for _, edge := range sp.VertexInstance.Vertex.Spec.ToEdges {
-			edgeKey := fmt.Sprintf("%s:%s", edge.From, edge.To)
-
 			// Condition to proceed for forwarding message: No conditions on edge, or message tags match edge conditions
 			proceed := edge.Conditions == nil || edge.Conditions.Tags == nil || len(edge.Conditions.Tags.Values) == 0 || sharedutil.CompareSlice(edge.Conditions.Tags.GetOperator(), tags, edge.Conditions.Tags.Values)
 
@@ -413,6 +420,7 @@ func (sp *SourceProcessor) getTransformerGoWhereDecider(shuffleFuncMap map[strin
 				// else forward the message to the default partition
 				partitionIdx := isb.DefaultPartitionIdx
 				if edge.GetToVertexPartitionCount() > 1 {
+					edgeKey := edge.From + ":" + edge.To
 					if edge.ToVertexType == dfv1.VertexTypeReduceUDF { // Shuffle on keys
 						partitionIdx = shuffleFuncMap[edgeKey].ShuffleOnKeys(keys)
 					} else { // Shuffle on msgId

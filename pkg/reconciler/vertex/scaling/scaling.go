@@ -19,7 +19,6 @@ package scaling
 import (
 	"container/list"
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -30,7 +29,6 @@ import (
 	"go.uber.org/zap"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	dfv1 "github.com/numaproj/numaflow/pkg/apis/numaflow/v1alpha1"
@@ -113,11 +111,11 @@ func (s *Scaler) StopWatching(key string) {
 // It waits for keys in the channel, and starts a scaling job
 func (s *Scaler) scale(ctx context.Context, id int, keyCh <-chan string) {
 	log := logging.FromContext(ctx)
-	log.Infof("Started autoscaling worker %v", id)
+	log.Infof("Started Vertex autoscaling worker %v", id)
 	for {
 		select {
 		case <-ctx.Done():
-			log.Infof("Stopped scaling worker %v", id)
+			log.Infof("Stopped Vertex autoscaling worker %v", id)
 			return
 		case key := <-keyCh:
 			if err := s.scaleOneVertex(ctx, key, id); err != nil {
@@ -170,16 +168,20 @@ func (s *Scaler) scaleOneVertex(ctx context.Context, key string, worker int) err
 		s.StopWatching(key) // Remove it in case it's watched.
 		return nil
 	}
+	if vertex.Status.Phase != dfv1.VertexPhaseRunning {
+		log.Infof("Vertex not in Running phase, skip scaling.")
+		return nil
+	}
+	if vertex.Status.UpdateHash != vertex.Status.CurrentHash && vertex.Status.UpdateHash != "" {
+		log.Info("Vertex is updating, skip scaling.")
+		return nil
+	}
 	secondsSinceLastScale := time.Since(vertex.Status.LastScaledAt.Time).Seconds()
 	scaleDownCooldown := float64(vertex.Spec.Scale.GetScaleDownCooldownSeconds())
 	scaleUpCooldown := float64(vertex.Spec.Scale.GetScaleUpCooldownSeconds())
 	if secondsSinceLastScale < scaleDownCooldown && secondsSinceLastScale < scaleUpCooldown {
 		// Skip scaling without needing further calculation
-		log.Debug("Cooldown period, skip scaling.")
-		return nil
-	}
-	if vertex.Status.Phase != dfv1.VertexPhaseRunning {
-		log.Debug("Vertex not in Running phase.")
+		log.Infof("Cooldown period, skip scaling.")
 		return nil
 	}
 	pl := &dfv1.Pipeline{}
@@ -197,11 +199,11 @@ func (s *Scaler) scaleOneVertex(ctx context.Context, key string, worker int) err
 		return nil
 	}
 	if pl.Spec.Lifecycle.GetDesiredPhase() != dfv1.PipelinePhaseRunning {
-		log.Debug("Corresponding Pipeline not in Running state.")
+		log.Info("Corresponding Pipeline not in Running state, skip scaling.")
 		return nil
 	}
 	if int(vertex.Status.Replicas) != vertex.GetReplicas() {
-		log.Debugf("Vertex %s might be under processing, replicas mismatch.", vertex.Name)
+		log.Infof("Vertex %s might be under processing, replicas mismatch, skip scaling.", vertex.Name)
 		return nil
 	}
 
@@ -227,10 +229,10 @@ func (s *Scaler) scaleOneVertex(ctx context.Context, key string, worker int) err
 		// If yes, then scale them back to 1
 		if !vertex.IsASource() {
 			if totalCurrentPending <= 0 {
-				log.Debugf("Vertex %s doesn't have any pending messages, skipping scaling back to 1", vertex.Name)
+				log.Infof("Vertex %s doesn't have any pending messages, skipping scaling back to 1", vertex.Name)
 				return nil
 			} else {
-				log.Debugf("Vertex %s has some pending messages, scaling back to 1", vertex.Name)
+				log.Infof("Vertex %s has some pending messages, scaling back to 1", vertex.Name)
 				return s.patchVertexReplicas(ctx, vertex, 1)
 			}
 		}
@@ -238,12 +240,18 @@ func (s *Scaler) scaleOneVertex(ctx context.Context, key string, worker int) err
 		// For source vertices,
 		// Periodically wake them up from 0 replicas to 1, to peek for the incoming messages
 		if secondsSinceLastScale >= float64(vertex.Spec.Scale.GetZeroReplicaSleepSeconds()) {
-			log.Debugf("Vertex %s has slept %v seconds, scaling up to peek.", vertex.Name, secondsSinceLastScale)
+			log.Infof("Vertex %s has slept %v seconds, scaling up to peek.", vertex.Name, secondsSinceLastScale)
 			return s.patchVertexReplicas(ctx, vertex, 1)
 		} else {
-			log.Debugf("Vertex %q has slept %v seconds, hasn't reached zeroReplicaSleepSeconds (%v seconds).", vertex.Name, secondsSinceLastScale, vertex.Spec.Scale.GetZeroReplicaSleepSeconds())
+			log.Infof("Vertex %q has slept %v seconds, hasn't reached zeroReplicaSleepSeconds (%v seconds), skip scaling.", vertex.Name, secondsSinceLastScale, vertex.Spec.Scale.GetZeroReplicaSleepSeconds())
 			return nil
 		}
+	}
+
+	// Vertex pods are not ready yet.
+	if vertex.Status.ReadyReplicas == 0 {
+		log.Infof("Vertex %q  has no ready replicas, skip scaling.", vertex.Name)
+		return nil
 	}
 
 	vMetrics, err := daemonClient.GetVertexMetrics(ctx, pl.Name, vertex.Spec.Name)
@@ -265,7 +273,7 @@ func (s *Scaler) scaleOneVertex(ctx context.Context, key string, worker int) err
 		rate, existing := m.ProcessingRates["default"]
 		// If rate is not available, we skip scaling.
 		if !existing || rate.GetValue() < 0 { // Rate not available
-			log.Debugf("Vertex %s has no rate information, skip scaling.", vertex.Name)
+			log.Infof("Vertex %s has no rate information, skip scaling.", vertex.Name)
 			return nil
 		}
 		partitionRates = append(partitionRates, rate.GetValue())
@@ -274,7 +282,7 @@ func (s *Scaler) scaleOneVertex(ctx context.Context, key string, worker int) err
 		pending, existing := m.Pendings["default"]
 		if !existing || pending.GetValue() < 0 || pending.GetValue() == isb.PendingNotAvailable {
 			// Pending not available, we don't do anything
-			log.Debugf("Vertex %s has no pending messages information, skip scaling.", vertex.Name)
+			log.Infof("Vertex %s has no pending messages information, skip scaling.", vertex.Name)
 			return nil
 		}
 		totalPending += pending.GetValue()
@@ -289,7 +297,7 @@ func (s *Scaler) scaleOneVertex(ctx context.Context, key string, worker int) err
 	}
 
 	var desired int32
-	current := int32(vertex.GetReplicas())
+	current := int32(vertex.Status.Replicas)
 	// if both totalRate and totalPending are 0, we scale down to 0
 	// since pending contains the pending acks, we can scale down to 0.
 	if totalPending == 0 && totalRate == 0 {
@@ -297,28 +305,28 @@ func (s *Scaler) scaleOneVertex(ctx context.Context, key string, worker int) err
 	} else {
 		desired = s.desiredReplicas(ctx, vertex, partitionRates, partitionPending, partitionBufferLengths, partitionAvailableBufferLengths)
 	}
-	log.Debugf("Calculated desired replica number of vertex %q is: %d.", vertex.Name, desired)
+	log.Infof("Calculated desired replica number of vertex %q is: %d.", vertex.Name, desired)
 	max := vertex.Spec.Scale.GetMaxReplicas()
 	min := vertex.Spec.Scale.GetMinReplicas()
 	if desired > max {
 		desired = max
-		log.Debugf("Calculated desired replica number %d of vertex %q is greater than max, using max %d.", vertex.Name, desired, max)
+		log.Infof("Calculated desired replica number %d of vertex %q is greater than max, using max %d.", desired, vertex.Name, max)
 	}
 	if desired < min {
 		desired = min
-		log.Debugf("Calculated desired replica number %d of vertex %q is smaller than min, using min %d.", vertex.Name, desired, min)
+		log.Infof("Calculated desired replica number %d of vertex %q is smaller than min, using min %d.", desired, vertex.Name, min)
 	}
 	if current > max || current < min { // Someone might have manually scaled up/down the vertex
 		return s.patchVertexReplicas(ctx, vertex, desired)
 	}
-	maxAllowed := int32(vertex.Spec.Scale.GetReplicasPerScale())
 	if desired < current {
+		maxAllowedDown := int32(vertex.Spec.Scale.GetReplicasPerScaleDown())
 		diff := current - desired
-		if diff > maxAllowed {
-			diff = maxAllowed
+		if diff > maxAllowedDown {
+			diff = maxAllowedDown
 		}
 		if secondsSinceLastScale < scaleDownCooldown {
-			log.Debugf("Cooldown period for scaling down, skip scaling.")
+			log.Infof("Cooldown period for scaling down, skip scaling.")
 			return nil
 		}
 		return s.patchVertexReplicas(ctx, vertex, current-diff) // We scale down gradually
@@ -327,23 +335,24 @@ func (s *Scaler) scaleOneVertex(ctx context.Context, key string, worker int) err
 		// When scaling up, need to check back pressure
 		directPressure, downstreamPressure := s.hasBackPressure(*pl, *vertex)
 		if directPressure {
-			if current > 1 {
-				log.Debugf("Vertex %s has direct back pressure from connected vertices, decreasing one replica.", key)
+			if current > min && current > 1 { // Scale down but not to 0
+				log.Infof("Vertex %q has direct back pressure from connected vertices, decreasing one replica.", key)
 				return s.patchVertexReplicas(ctx, vertex, current-1)
 			} else {
-				log.Debugf("Vertex %s has direct back pressure from connected vertices, skip scaling.", key)
+				log.Infof("Vertex %q has direct back pressure from connected vertices, skip scaling.", key)
 				return nil
 			}
 		} else if downstreamPressure {
-			log.Debugf("Vertex %s has back pressure in downstream vertices, skip scaling.", key)
+			log.Infof("Vertex %q has back pressure in downstream vertices, skip scaling.", key)
 			return nil
 		}
+		maxAllowedUp := int32(vertex.Spec.Scale.GetReplicasPerScaleUp())
 		diff := desired - current
-		if diff > maxAllowed {
-			diff = maxAllowed
+		if diff > maxAllowedUp {
+			diff = maxAllowedUp
 		}
 		if secondsSinceLastScale < scaleUpCooldown {
-			log.Debugf("Cooldown period for scaling up, skip scaling.")
+			log.Infof("Cooldown period for scaling up, skip scaling.")
 			return nil
 		}
 		return s.patchVertexReplicas(ctx, vertex, current+diff) // We scale up gradually
@@ -369,15 +378,15 @@ func (s *Scaler) desiredReplicas(_ context.Context, vertex *dfv1.Vertex, partiti
 		if vertex.IsASource() {
 			// For sources, we calculate the time of finishing processing the pending messages,
 			// and then we know how many replicas are needed to get them done in target seconds.
-			desired = int32(math.Round(((float64(pending) / rate) / float64(vertex.Spec.Scale.GetTargetProcessingSeconds())) * float64(vertex.Status.Replicas)))
+			desired = int32(math.Round(((float64(pending) / rate) / float64(vertex.Spec.Scale.GetTargetProcessingSeconds())) * float64(vertex.Status.ReadyReplicas)))
 		} else {
 			// For UDF and sinks, we calculate the available buffer length, and consider it is the contribution of current replicas,
 			// then we figure out how many replicas are needed to keep the available buffer length at target level.
 			if pending >= partitionBufferLengths[i] {
 				// Simply return current replica number + max allowed if the pending messages are more than available buffer length
-				desired = int32(vertex.Status.Replicas) + int32(vertex.Spec.Scale.GetReplicasPerScale())
+				desired = int32(vertex.Status.Replicas) + int32(vertex.Spec.Scale.GetReplicasPerScaleUp())
 			} else {
-				singleReplicaContribution := float64(partitionBufferLengths[i]-pending) / float64(vertex.Status.Replicas)
+				singleReplicaContribution := float64(partitionBufferLengths[i]-pending) / float64(vertex.Status.ReadyReplicas)
 				desired = int32(math.Round(float64(partitionAvailableBufferLengths[i]) / singleReplicaContribution))
 			}
 		}
@@ -385,7 +394,7 @@ func (s *Scaler) desiredReplicas(_ context.Context, vertex *dfv1.Vertex, partiti
 		if desired == 0 {
 			desired = 1
 		}
-		if desired > int32(pending) { // For some corner cases, we don't want to scale up to more than pending.
+		if desired > int32(pending) && pending > 0 { // For some corner cases, we don't want to scale up to more than pending.
 			desired = int32(pending)
 		}
 		// maxDesired is the max of all partitions
@@ -400,8 +409,8 @@ func (s *Scaler) desiredReplicas(_ context.Context, vertex *dfv1.Vertex, partiti
 // Each worker keeps picking up scaling tasks (which contains vertex keys) to calculate the desired replicas,
 // and patch the vertex spec with the new replica number if needed.
 func (s *Scaler) Start(ctx context.Context) error {
-	log := logging.FromContext(ctx).Named("autoscaler")
-	log.Info("Starting autoscaler...")
+	log := logging.FromContext(ctx).Named("vertex-autoscaler")
+	log.Info("Starting vertex autoscaler...")
 	keyCh := make(chan string)
 	ctx, cancel := context.WithCancel(logging.WithLogger(ctx, log))
 	defer cancel()
@@ -488,15 +497,11 @@ loop:
 func (s *Scaler) patchVertexReplicas(ctx context.Context, vertex *dfv1.Vertex, desiredReplicas int32) error {
 	log := logging.FromContext(ctx)
 	origin := vertex.Spec.Replicas
-	vertex.Spec.Replicas = ptr.To[int32](desiredReplicas)
-	body, err := json.Marshal(vertex)
-	if err != nil {
-		return fmt.Errorf("failed to marshal vertex object to json, %w", err)
-	}
-	if err := s.client.Patch(ctx, vertex, client.RawPatch(types.MergePatchType, body)); err != nil && !apierrors.IsNotFound(err) {
+	patchJson := fmt.Sprintf(`{"spec":{"replicas":%d}}`, desiredReplicas)
+	if err := s.client.Patch(ctx, vertex, client.RawPatch(types.MergePatchType, []byte(patchJson))); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to patch vertex replicas, %w", err)
 	}
-	log.Infow("Auto scaling - vertex replicas changed.", zap.Int32p("from", origin), zap.Int32("to", desiredReplicas), zap.String("pipeline", vertex.Spec.PipelineName), zap.String("vertex", vertex.Spec.Name))
+	log.Infow("Auto scaling - vertex replicas changed.", zap.Int32p("from", origin), zap.Int32("to", desiredReplicas), zap.String("namespace", vertex.Namespace), zap.String("pipeline", vertex.Spec.PipelineName), zap.String("vertex", vertex.Spec.Name))
 	return nil
 }
 

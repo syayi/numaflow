@@ -27,6 +27,9 @@ type Sink struct {
 	// initiated if the ud-sink response field sets it.
 	// +optional
 	Fallback *AbstractSink `json:"fallback,omitempty" protobuf:"bytes,2,opt,name=fallback"`
+	// RetryStrategy struct encapsulates the settings for retrying operations in the event of failures.
+	// +optional
+	RetryStrategy RetryStrategy `json:"retryStrategy,omitempty" protobuf:"bytes,3,opt,name=retryStrategy"`
 }
 
 type AbstractSink struct {
@@ -76,7 +79,7 @@ func (s Sink) getUDSinkContainer(mainContainerReq getContainerReq) corev1.Contai
 		c = c.args(x.Args...)
 	}
 	c = c.appendEnv(corev1.EnvVar{Name: EnvUDContainerType, Value: UDContainerSink})
-	c = c.appendEnv(x.Env...).appendVolumeMounts(x.VolumeMounts...).resources(x.Resources).securityContext(x.SecurityContext).appendEnvFrom(x.EnvFrom...)
+	c = c.appendEnv(x.Env...).appendVolumeMounts(x.VolumeMounts...).resources(x.Resources).securityContext(x.SecurityContext).appendEnvFrom(x.EnvFrom...).appendPorts(x.Ports...)
 	if x.ImagePullPolicy != nil {
 		c = c.imagePullPolicy(*x.ImagePullPolicy)
 	}
@@ -89,9 +92,10 @@ func (s Sink) getUDSinkContainer(mainContainerReq getContainerReq) corev1.Contai
 				Scheme: corev1.URISchemeHTTPS,
 			},
 		},
-		InitialDelaySeconds: 30,
-		PeriodSeconds:       60,
-		TimeoutSeconds:      30,
+		InitialDelaySeconds: GetProbeInitialDelaySecondsOr(x.LivenessProbe, UDContainerLivezInitialDelaySeconds),
+		PeriodSeconds:       GetProbePeriodSecondsOr(x.LivenessProbe, UDContainerLivezPeriodSeconds),
+		TimeoutSeconds:      GetProbeTimeoutSecondsOr(x.LivenessProbe, UDContainerLivezTimeoutSeconds),
+		FailureThreshold:    GetProbeFailureThresholdOr(x.LivenessProbe, UDContainerLivezFailureThreshold),
 	}
 	return container
 }
@@ -110,7 +114,7 @@ func (s Sink) getFallbackUDSinkContainer(mainContainerReq getContainerReq) corev
 		c = c.args(x.Args...)
 	}
 	c = c.appendEnv(corev1.EnvVar{Name: EnvUDContainerType, Value: UDContainerFallbackSink})
-	c = c.appendEnv(x.Env...).appendVolumeMounts(x.VolumeMounts...).resources(x.Resources).securityContext(x.SecurityContext).appendEnvFrom(x.EnvFrom...)
+	c = c.appendEnv(x.Env...).appendVolumeMounts(x.VolumeMounts...).resources(x.Resources).securityContext(x.SecurityContext).appendEnvFrom(x.EnvFrom...).appendPorts(x.Ports...)
 	if x.ImagePullPolicy != nil {
 		c = c.imagePullPolicy(*x.ImagePullPolicy)
 	}
@@ -123,9 +127,10 @@ func (s Sink) getFallbackUDSinkContainer(mainContainerReq getContainerReq) corev
 				Scheme: corev1.URISchemeHTTPS,
 			},
 		},
-		InitialDelaySeconds: 30,
-		PeriodSeconds:       60,
-		TimeoutSeconds:      30,
+		InitialDelaySeconds: GetProbeInitialDelaySecondsOr(x.LivenessProbe, UDContainerLivezInitialDelaySeconds),
+		PeriodSeconds:       GetProbePeriodSecondsOr(x.LivenessProbe, UDContainerLivezPeriodSeconds),
+		TimeoutSeconds:      GetProbeTimeoutSecondsOr(x.LivenessProbe, UDContainerLivezTimeoutSeconds),
+		FailureThreshold:    GetProbeFailureThresholdOr(x.LivenessProbe, UDContainerLivezFailureThreshold),
 	}
 	return container
 }

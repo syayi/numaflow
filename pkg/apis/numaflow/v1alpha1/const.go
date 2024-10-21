@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -25,7 +26,8 @@ const (
 	Project = "numaflow"
 
 	// label/annotation keys.
-	KeyHash             = "numaflow.numaproj.io/hash" // hash of the object
+	KeyInstance         = "numaflow.numaproj.io/instance" // instance key of the object
+	KeyHash             = "numaflow.numaproj.io/hash"     // hash of the object
 	KeyComponent        = "app.kubernetes.io/component"
 	KeyPartOf           = "app.kubernetes.io/part-of"
 	KeyManagedBy        = "app.kubernetes.io/managed-by"
@@ -34,12 +36,11 @@ const (
 	KeyISBSvcType       = "numaflow.numaproj.io/isbsvc-type"
 	KeyPipelineName     = "numaflow.numaproj.io/pipeline-name"
 	KeyVertexName       = "numaflow.numaproj.io/vertex-name"
+	KeyMonoVertexName   = "numaflow.numaproj.io/mono-vertex-name"
 	KeyReplica          = "numaflow.numaproj.io/replica"
 	KeySideInputName    = "numaflow.numaproj.io/side-input-name"
 	KeyPauseTimestamp   = "numaflow.numaproj.io/pause-timestamp"
 	KeyDefaultContainer = "kubectl.kubernetes.io/default-container"
-
-	RemovePauseTimestampPatch = `[{"op": "remove", "path": "/metadata/annotations/numaflow.numaproj.io~1pause-timestamp"}]`
 
 	// ID key in the header of sources like http
 	KeyMetaID          = "X-Numaflow-Id"
@@ -74,6 +75,7 @@ const (
 	CtrUdSideInput       = "udsi"
 	CtrInitSideInputs    = "init-side-inputs"
 	CtrSideInputsWatcher = "side-inputs-synchronizer"
+	CtrServing           = "serving"
 
 	// user-defined container types
 	UDContainerFunction     = "udf"
@@ -82,32 +84,37 @@ const (
 	UDContainerTransformer  = "transformer"
 	UDContainerSource       = "udsource"
 	UDContainerSideInputs   = "udsi"
+	ServingSourceContainer  = "serving"
 
 	// components
-	ComponentISBSvc           = "isbsvc"
-	ComponentDaemon           = "daemon"
-	ComponentVertex           = "vertex"
-	ComponentJob              = "job"
-	ComponentSideInputManager = "side-inputs-manager"
-	ComponentUXServer         = "numaflow-ux"
+	ComponentISBSvc            = "isbsvc"
+	ComponentDaemon            = "daemon"
+	ComponentVertex            = "vertex"
+	ComponentMonoVertex        = "mono-vertex"
+	ComponentMonoVertexDaemon  = "mono-vertex-daemon"
+	ComponentJob               = "job"
+	ComponentSideInputManager  = "side-inputs-manager"
+	ComponentUXServer          = "numaflow-ux"
+	ComponentControllerManager = "controller-manager"
 
 	// controllers
-	ControllerISBSvc   = "isbsvc-controller"
-	ControllerPipeline = "pipeline-controller"
-	ControllerVertex   = "vertex-controller"
+	ControllerISBSvc     = "isbsvc-controller"
+	ControllerPipeline   = "pipeline-controller"
+	ControllerVertex     = "vertex-controller"
+	ControllerMonoVertex = "mono-vertex-controller"
 
 	// ENV vars
 	EnvNamespace                        = "NUMAFLOW_NAMESPACE"
 	EnvPipelineName                     = "NUMAFLOW_PIPELINE_NAME"
 	EnvVertexName                       = "NUMAFLOW_VERTEX_NAME"
-	EnvMapStreaming                     = "NUMAFLOW_MAP_STREAMING"
-	EnvBatchMap                         = "NUMAFLOW_BATCH_MAP"
+	EnvMonoVertexName                   = "NUMAFLOW_MONO_VERTEX_NAME"
 	EnvCallbackEnabled                  = "NUMAFLOW_CALLBACK_ENABLED"
 	EnvCallbackURL                      = "NUMAFLOW_CALLBACK_URL"
 	EnvPod                              = "NUMAFLOW_POD"
 	EnvReplica                          = "NUMAFLOW_REPLICA"
 	EnvVertexObject                     = "NUMAFLOW_VERTEX_OBJECT"
 	EnvPipelineObject                   = "NUMAFLOW_PIPELINE_OBJECT"
+	EnvMonoVertexObject                 = "NUMAFLOW_MONO_VERTEX_OBJECT"
 	EnvSideInputObject                  = "NUMAFLOW_SIDE_INPUT_OBJECT"
 	EnvImage                            = "NUMAFLOW_IMAGE"
 	EnvImagePullPolicy                  = "NUMAFLOW_IMAGE_PULL_POLICY"
@@ -137,13 +144,22 @@ const (
 	EnvMemoryRequest                    = "NUMAFLOW_MEMORY_REQUEST"
 	EnvMemoryLimit                      = "NUMAFLOW_MEMORY_LIMIT"
 	EnvGoDebug                          = "GODEBUG"
-
-	PathVarRun            = "/var/run/numaflow"
-	VertexMetricsPort     = 2469
-	VertexMetricsPortName = "metrics"
-	VertexHTTPSPort       = 8443
-	VertexHTTPSPortName   = "https"
-	DaemonServicePort     = 4327
+	EnvServingJetstreamStream           = "NUMAFLOW_SERVING_JETSTREAM_STREAM"
+	EnvServingObject                    = "NUMAFLOW_SERVING_SOURCE_OBJECT"
+	EnvServingPort                      = "NUMAFLOW_SERVING_APP_LISTEN_PORT"
+	EnvServingAuthToken                 = "NUMAFLOW_SERVING_AUTH_TOKEN"
+	EnvServingMinPipelineSpec           = "NUMAFLOW_SERVING_MIN_PIPELINE_SPEC"
+	EnvServingHostIP                    = "NUMAFLOW_SERVING_HOST_IP"
+	EnvServingStoreTTL                  = "NUMAFLOW_SERVING_STORE_TTL"
+	PathVarRun                          = "/var/run/numaflow"
+	VertexMetricsPort                   = 2469
+	VertexMetricsPortName               = "metrics"
+	VertexHTTPSPort                     = 8443
+	VertexHTTPSPortName                 = "https"
+	DaemonServicePort                   = 4327
+	MonoVertexMetricsPort               = 2469
+	MonoVertexMetricsPortName           = "metrics"
+	MonoVertexDaemonServicePort         = 4327
 
 	DefaultRequeueAfter = 10 * time.Second
 
@@ -153,6 +169,7 @@ const (
 	DefaultBufferLength     = 30000
 	DefaultBufferUsageLimit = 0.8
 	DefaultReadBatchSize    = 500
+	DefaultReadTimeout      = 1 * time.Second
 
 	// Auto scaling
 	DefaultLookbackSeconds          = 120 // Default lookback seconds for calculating avg rate and pending
@@ -203,12 +220,6 @@ const (
 	// KeysDelimitter is the delimitter used to join keys
 	KeysDelimitter = ":"
 
-	// UDF map streaming
-	MapUdfStreamKey = "numaflow.numaproj.io/map-stream"
-
-	// BatchMapUdfStreamKey is the annotation for enabling UDF Batch Map
-	BatchMapUdfStreamKey = "numaflow.numaproj.io/batch-map"
-
 	// Pipeline health status
 	PipelineStatusHealthy   = "healthy"
 	PipelineStatusUnknown   = "unknown"
@@ -218,9 +229,57 @@ const (
 	PipelineStatusDeleting  = "deleting"
 	PipelineStatusUnhealthy = "unhealthy"
 
+	// MonoVertex health status
+	// TODO - more statuses to be added
+	MonoVertexStatusHealthy   = "healthy"
+	MonoVertexStatusUnhealthy = "unhealthy"
+	MonoVertexStatusUnknown   = "unknown"
+	MonoVertexStatusCritical  = "critical"
+	MonoVertexStatusWarning   = "warning"
+
 	// Callback annotation keys
 	CallbackEnabledKey = "numaflow.numaproj.io/callback"
 	CallbackURLKey     = "numaflow.numaproj.io/callback-url"
+
+	// Serving source
+	DefaultServingTTL = 24 * time.Hour
+
+	// Retry Strategy
+
+	// DefaultRetryInterval specifies the default time interval between retry attempts.
+	// This value can be adjusted depending on the specific requirements
+	// for responsiveness and system load considerations.
+	DefaultRetryInterval = 1 * time.Millisecond
+
+	// DefaultRetrySteps is defined to dictate how many times the platform should attempt to retry
+	// a write operation to a sink following a failure. The value is set to math.MaxInt32 - 1,
+	// effectively indicating an almost indefinite number of retries. This large default is chosen
+	// to ensure that the system will try persistently to carry out the operation unless explicitly
+	// configured otherwise. This approach can be useful in environments where loss of data
+	// due to intermittent failures is unacceptable.
+	DefaultRetrySteps = math.MaxInt32 - 1
+
+	// DefaultOnFailureRetryStrategy specifies the strategy to be used when the write to a sink fails and
+	// the retries count specified are exhausted.
+	// Setting this to 'OnFailureRetry' means the system is configured by default
+	// to retry the failed operation until successful completion.
+	// This strategy argues for robustness in operations, aiming
+	// to minimize the chances of data loss or failed deliveries in transient failure scenarios.
+	DefaultOnFailureRetryStrategy = OnFailureRetry
+
+	// Defeault values for readiness and liveness probes
+	NumaContainerReadyzInitialDelaySeconds = 5
+	NumaContainerReadyzPeriodSeconds       = 10
+	NumaContainerReadyzTimeoutSeconds      = 30
+	NumaContainerReadyzFailureThreshold    = 6
+	NumaContainerLivezInitialDelaySeconds  = 20
+	NumaContainerLivezPeriodSeconds        = 60
+	NumaContainerLivezTimeoutSeconds       = 30
+	NumaContainerLivezFailureThreshold     = 5
+	UDContainerLivezInitialDelaySeconds    = 30
+	UDContainerLivezPeriodSeconds          = 60
+	UDContainerLivezTimeoutSeconds         = 30
+	UDContainerLivezFailureThreshold       = 5
 )
 
 var (

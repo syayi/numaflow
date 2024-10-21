@@ -17,9 +17,6 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.message
-      name: Message
-      type: string
     - jsonPath: .status.vertexCount
       name: Vertices
       type: integer
@@ -35,9 +32,20 @@ spec:
       name: UDFs
       priority: 10
       type: integer
+    - jsonPath: .status.mapUDFCount
+      name: Map UDFs
+      priority: 10
+      type: integer
+    - jsonPath: .status.reduceUDFCount
+      name: Reduce UDFs
+      priority: 10
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
+    - jsonPath: .status.message
+      name: Message
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:

@@ -17,7 +17,7 @@ limitations under the License.
 package isb
 
 import (
-	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -89,7 +89,7 @@ type MessageID struct {
 
 // String returns the string representation of the MessageID
 func (id MessageID) String() string {
-	return fmt.Sprintf("%s-%s-%d", id.VertexName, id.Offset, id.Index)
+	return id.VertexName + "-" + id.Offset + "-" + strconv.Itoa(int(id.Index))
 }
 
 // Body is the body of the message
@@ -126,9 +126,7 @@ type WriteMessage struct {
 
 // ReadWriteMessagePair is a pair of ReadMessage and a list of WriteMessage which will be used
 // to map the read message to a list of write messages that the udf returns.
-// The error field is used to capture any error that occurs during the processing of the message.
 type ReadWriteMessagePair struct {
 	ReadMessage   *ReadMessage
 	WriteMessages []*WriteMessage
-	Err           error
 }
